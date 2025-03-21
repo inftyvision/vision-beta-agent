@@ -204,15 +204,15 @@ export default function AgentInteraction({ agentId }: AgentInteractionProps) {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-50 to-blue-50">
+    <div className="flex flex-col h-screen bg-white">
       {/* Header with agent name */}
-      <div className="bg-white shadow p-4 border-b">
+      <div className="bg-gray-50 shadow p-4 border-b">
         <div className="max-w-3xl mx-auto">
           <div className="flex justify-between items-center mb-3">
             <h1 className="text-xl font-semibold text-gray-800">{agentId.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')} Agent</h1>
             <button
               onClick={exportConversation}
-              className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md flex items-center"
+              className="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-md flex items-center"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -224,7 +224,7 @@ export default function AgentInteraction({ agentId }: AgentInteractionProps) {
       </div>
       
       {/* Chat container */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4 bg-white">
         <div className="max-w-3xl mx-auto space-y-4">
           {messages.map((message, index) => (
             <div 
@@ -234,8 +234,8 @@ export default function AgentInteraction({ agentId }: AgentInteractionProps) {
               <div 
                 className={`max-w-[80%] rounded-lg px-4 py-3 shadow-sm ${
                   message.role === 'user' 
-                    ? 'bg-blue-600 text-white' 
-                    : 'bg-white border border-gray-200 text-gray-800'
+                    ? 'bg-blue-50 text-gray-800 border border-blue-100' 
+                    : 'bg-gray-50 border border-gray-200 text-gray-800'
                 }`}
               >
                 {message.content}
@@ -267,25 +267,39 @@ export default function AgentInteraction({ agentId }: AgentInteractionProps) {
       </div>
       
       {/* Input area */}
-      <div className="bg-white border-t p-4">
-        <div className="max-w-3xl mx-auto flex">
-          <textarea
-            ref={inputRef}
-            className="flex-1 border border-gray-300 rounded-l-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none text-gray-800"
-            placeholder={`Message ${agentId.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')} Agent...`}
-            rows={1}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isLoading}
-          />
-          <button
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-r-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={handleSendMessage}
-            disabled={!inputValue.trim() || isLoading}
-          >
-            Send
-          </button>
+      <div className="border-t p-4 bg-gray-50">
+        <div className="max-w-3xl mx-auto">
+          <div className="flex items-center">
+            <textarea
+              ref={inputRef}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type your message here..."
+              className="flex-1 p-3 border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-800 bg-white"
+              rows={1}
+              disabled={isLoading}
+            />
+            <button
+              onClick={handleSendMessage}
+              disabled={isLoading || !inputValue.trim()}
+              className="bg-blue-600 text-white p-3 rounded-r-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 disabled:bg-gray-300 disabled:cursor-not-allowed"
+            >
+              {isLoading ? (
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : (
+                <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                </svg>
+              )}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-gray-500 text-right">
+            Press Enter to send, Shift+Enter for a new line
+          </p>
         </div>
       </div>
     </div>

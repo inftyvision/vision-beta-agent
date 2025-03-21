@@ -1,233 +1,208 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import agents from '@/config/agents.json';
 import { trackEvent } from '@/utils/analytics';
 import { addToMemory, getMemory, clearMemory } from '@/utils/memory';
+import { IoSend } from 'react-icons/io5';
+import { FaSpinner } from 'react-icons/fa';
+import { AiOutlineClear } from 'react-icons/ai';
+import { FiDownload } from 'react-icons/fi';
 
 interface Message {
-  role: 'user' | 'agent';
+  id: string;
   content: string;
+  sender: 'user' | 'mother' | 'agent';
   agentId?: string;
-  responseTime?: number;
+  agentName?: string;
+  timestamp: Date;
+  context?: any;
+}
+
+interface AgentOption {
+  id: string;
+  name: string;
+  description: string;
 }
 
 export default function SimpleChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inputValue, setInputValue] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [currentAgent, setCurrentAgent] = useState<string>('mother-agent');
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const messageEndRef = useRef<HTMLDivElement>(null);
   
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Format agents data for selection
+  const agentOptions: AgentOption[] = [
+    { id: 'mother-agent', name: 'Mother Agent', description: 'The main coordination agent' },
+    ...agents.agents.map(agent => ({
+      id: agent.id,
+      name: agent.name,
+      description: agent.description
+    }))
+  ];
 
-  // Auto-scroll to bottom of messages
+  // Scroll to bottom of messages when new messages are added
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Initialize chat with welcome message and load message history
-  useEffect(() => {
-    // Load past conversation from memory
-    const loadConversationHistory = () => {
-      const storedMessages = getMemory('all-agents', 100).map(item => ({
-        role: item.role,
-        content: item.content,
-        agentId: item.agentId
-      }));
-      
-      if (storedMessages.length > 0) {
-        setMessages(storedMessages);
-      } else {
-        // Add initial welcome message if no history exists
-        const welcomeMessage: Message = {
-          role: 'agent',
-          content: `Hello! I'm the Mother Agent. How can I help you today?`,
-          agentId: 'mother-agent'
-        };
-        setMessages([welcomeMessage]);
-        
-        // Store welcome message in memory
-        addToMemory('all-agents', {
-          role: 'agent',
-          content: welcomeMessage.content,
-          agentId: 'mother-agent'
-        });
-      }
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim()) return;
+
+    // Add user message to chat
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      content: input,
+      sender: 'user',
+      timestamp: new Date()
     };
-    
-    loadConversationHistory();
-    
-    // Focus input field
-    inputRef.current?.focus();
-  }, []);
-
-  const getCurrentAgentName = (): string => {
-    if (currentAgent === 'mother-agent') return 'Mother Agent';
-    const agent = agents.agents.find(a => a.id === currentAgent);
-    return agent ? agent.name : currentAgent;
-  };
-
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
-    
-    const userMessage = { role: 'user' as const, content: inputValue };
     setMessages(prev => [...prev, userMessage]);
-    setInputValue('');
-    setIsLoading(true);
-    
-    // Store user message in memory
-    addToMemory('all-agents', {
-      role: 'user',
-      content: userMessage.content
-    });
-    
-    // Start tracking request
-    const requestStartTime = performance.now();
-    trackEvent({
-      agentId: currentAgent,
-      eventType: 'request',
-      metadata: { command: userMessage.content, source: 'simple-chat' }
-    });
-    
+    setInput('');
+    setLoading(true);
+
     try {
-      let endpoint = '/api/mother-agent';
-      let payload: any = { command: userMessage.content };
-      
-      if (currentAgent !== 'mother-agent') {
-        endpoint = '/api/agents/execute';
-        payload = { 
-          agentId: currentAgent,
-          command: userMessage.content
-        };
-      }
-      
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to get response');
-      }
-      
-      // Track successful response
-      const requestDuration = performance.now() - requestStartTime;
-      trackEvent({
-        agentId: currentAgent,
-        eventType: 'response',
-        duration: requestDuration,
-        metadata: { 
-          command: userMessage.content, 
-          responseLength: data.response.length,
-          source: 'simple-chat'
+      // If no agent is selected or Mother Agent is selected, use the mother agent
+      if (!selectedAgentId || selectedAgentId === 'mother-agent') {
+        // Send request to mother agent API
+        const response = await fetch('/api/mother-agent', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ command: input })
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to send message to mother agent');
         }
-      });
-      
-      const agentResponse = {
-        role: 'agent' as const,
-        content: data.response || 'No response received',
-        agentId: data.delegatedAgent || currentAgent,
-        responseTime: requestDuration
-      };
-      
-      // Store agent response in memory
-      addToMemory('all-agents', {
-        role: 'agent',
-        content: agentResponse.content,
-        agentId: agentResponse.agentId
-      });
-      
-      setMessages(prev => [...prev, agentResponse]);
+
+        const data = await response.json();
+        
+        if (data.delegatedAgent) {
+          // Mother agent has delegated to another agent
+          const motherResponse: Message = {
+            id: Date.now().toString() + '-mother',
+            content: `I'm delegating this request to the ${data.delegatedAgent} agent because: ${data.reason}`,
+            sender: 'mother',
+            timestamp: new Date(),
+            context: data.context || {}
+          };
+          setMessages(prev => [...prev, motherResponse]);
+          
+          // Now get response from the delegated agent
+          const agentResponse = await fetch('/api/agents/execute', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              agentId: data.delegatedAgent,
+              command: input,
+              context: data.context || {}
+            })
+          });
+          
+          if (!agentResponse.ok) {
+            throw new Error('Failed to get response from delegated agent');
+          }
+          
+          const agentData = await agentResponse.json();
+          
+          // Add the agent's response to chat
+          const agentMessage: Message = {
+            id: Date.now().toString() + '-agent',
+            content: agentData.response,
+            sender: 'agent',
+            agentId: data.delegatedAgent,
+            agentName: agentOptions.find(a => a.id === data.delegatedAgent)?.name || data.delegatedAgent,
+            timestamp: new Date(),
+            context: data.context || {}
+          };
+          setMessages(prev => [...prev, agentMessage]);
+        } else {
+          // Mother agent has responded directly
+          const motherResponse: Message = {
+            id: Date.now().toString() + '-mother',
+            content: data.response,
+            sender: 'mother',
+            timestamp: new Date(),
+            context: data.context || {}
+          };
+          setMessages(prev => [...prev, motherResponse]);
+        }
+      } else {
+        // Direct request to specific agent
+        const agentResponse = await fetch('/api/agents/execute', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            agentId: selectedAgentId,
+            command: input
+          })
+        });
+        
+        if (!agentResponse.ok) {
+          throw new Error('Failed to get response from agent');
+        }
+        
+        const agentData = await agentResponse.json();
+        
+        // Add the agent's response to chat
+        const agentMessage: Message = {
+          id: Date.now().toString() + '-agent',
+          content: agentData.response,
+          sender: 'agent',
+          agentId: selectedAgentId,
+          agentName: agentOptions.find(a => a.id === selectedAgentId)?.name || selectedAgentId,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, agentMessage]);
+      }
     } catch (error) {
       console.error('Error sending message:', error);
-      
-      // Track error
-      trackEvent({
-        agentId: currentAgent,
-        eventType: 'error',
-        metadata: { 
-          error: error instanceof Error ? error.message : 'Unknown error',
-          command: userMessage.content,
-          source: 'simple-chat'
-        }
-      });
-      
-      const errorMessage = { 
-        role: 'agent' as const, 
-        content: 'Sorry, I encountered an error while processing your request.',
-        agentId: currentAgent
+      // Add error message to chat
+      const errorMessage: Message = {
+        id: Date.now().toString() + '-error',
+        content: 'Sorry, there was an error processing your request. Please try again.',
+        sender: 'mother',
+        timestamp: new Date()
       };
-      
-      // Store error message in memory
-      addToMemory('all-agents', {
-        role: 'agent',
-        content: errorMessage.content,
-        agentId: errorMessage.agentId
-      });
-      
       setMessages(prev => [...prev, errorMessage]);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
+  const clearChat = () => {
+    setMessages([]);
   };
 
-  const switchAgent = (agentId: string) => {
-    if (currentAgent === agentId) return;
-    
-    // Track agent switch
-    trackEvent({
-      agentId,
-      eventType: 'request',
-      metadata: { 
-        source: 'simple-chat', 
-        action: 'agent-switch',
-        previousAgent: currentAgent
+  const downloadChatHistory = () => {
+    // Format chat history as text
+    const chatText = messages.map(msg => {
+      const sender = msg.sender === 'user' 
+        ? 'You' 
+        : msg.sender === 'mother' 
+          ? 'Mother Agent' 
+          : `${msg.agentName} Agent`;
+      
+      const timestamp = msg.timestamp.toLocaleString();
+      let text = `[${timestamp}] ${sender}: ${msg.content}`;
+      
+      // Add context information if available
+      if (msg.context && Object.keys(msg.context).length > 0) {
+        text += `\nContext: ${JSON.stringify(msg.context, null, 2)}`;
       }
-    });
-    
-    const switchMessage = {
-      role: 'agent' as const,
-      content: `You're now chatting with the ${agentId === 'mother-agent' ? 'Mother Agent' : 
-        agents.agents.find(a => a.id === agentId)?.name || agentId}.`,
-      agentId: agentId
-    };
-    
-    // Add a switch notification to the UI
-    setMessages(prev => [...prev, switchMessage]);
-    
-    // Store the switch message in memory
-    addToMemory('all-agents', {
-      role: 'agent',
-      content: switchMessage.content,
-      agentId: switchMessage.agentId
-    });
-    
-    setCurrentAgent(agentId);
-  };
-
-  // Function to export the conversation history
-  const exportConversation = () => {
-    const conversationText = messages.map(msg => {
-      const sender = msg.role === 'user' ? 'User' : 
-        msg.agentId === 'mother-agent' ? 'Mother Agent' : 
-        agents.agents.find(a => a.id === msg.agentId)?.name || msg.agentId;
-        
-      return `${sender}: ${msg.content}`;
+      
+      return text;
     }).join('\n\n');
     
-    // Create a blob and download link
-    const blob = new Blob([conversationText], { type: 'text/plain' });
+    // Create a blob and download
+    const blob = new Blob([chatText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -236,186 +211,127 @@ export default function SimpleChatInterface() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    
-    // Track export event
-    trackEvent({
-      agentId: currentAgent,
-      eventType: 'request',
-      metadata: { 
-        source: 'simple-chat', 
-        action: 'export-history',
-        messageCount: messages.length
-      }
-    });
-  };
-
-  // Function to clear the conversation history
-  const clearConversation = () => {
-    if (window.confirm('Are you sure you want to clear the chat history? This action cannot be undone.')) {
-      // Clear memory
-      clearMemory('all-agents');
-      
-      // Add a fresh welcome message
-      const welcomeMessage = {
-        role: 'agent' as const,
-        content: `Chat history has been cleared. How can I help you today?`,
-        agentId: currentAgent
-      };
-      
-      // Update UI
-      setMessages([welcomeMessage]);
-      
-      // Store the welcome message in memory
-      addToMemory('all-agents', {
-        role: 'agent',
-        content: welcomeMessage.content,
-        agentId: welcomeMessage.agentId
-      });
-      
-      // Track clear event
-      trackEvent({
-        agentId: currentAgent,
-        eventType: 'request',
-        metadata: { 
-          source: 'simple-chat', 
-          action: 'clear-history'
-        }
-      });
-    }
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-50 to-blue-50">
-      {/* Header with agent selection */}
-      <div className="bg-white shadow p-4 border-b">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex justify-between items-center mb-3">
-            <h1 className="text-xl font-semibold text-gray-800">Multi-Agent Chat</h1>
-            <div className="flex space-x-2">
-              <button
-                onClick={clearConversation}
-                className="px-3 py-1 text-sm bg-red-50 hover:bg-red-100 text-red-600 rounded-md flex items-center"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                Clear
-              </button>
-              <button
-                onClick={exportConversation}
-                className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md flex items-center"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                Export
-              </button>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2 justify-center">
-            <button
-              onClick={() => switchAgent('mother-agent')}
-              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                currentAgent === 'mother-agent' 
-                  ? 'bg-purple-600 text-white' 
-                  : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
-              }`}
-            >
-              Mother Agent
-            </button>
-            
-            {agents.agents.map(agent => (
-              <button
-                key={agent.id}
-                onClick={() => switchAgent(agent.id)}
-                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                  currentAgent === agent.id 
-                    ? 'bg-blue-600 text-white' 
-                    : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
-                }`}
-              >
-                {agent.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      
-      {/* Chat container */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-3xl mx-auto space-y-4">
-          {messages.map((message, index) => (
-            <div 
-              key={index} 
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div 
-                className={`max-w-[80%] rounded-lg px-4 py-3 shadow-sm ${
-                  message.role === 'user' 
-                    ? 'bg-blue-600 text-white' 
-                    : message.content.includes("You're now chatting with")
-                      ? 'bg-gradient-to-r from-purple-100 to-indigo-100 border border-indigo-200 text-gray-800'
-                      : 'bg-white border border-gray-200 text-gray-800'
-                }`}
-              >
-                {message.content}
-                {message.agentId && message.role === 'agent' && (
-                  <div className="mt-1 text-xs text-gray-500 flex items-center justify-between">
-                    <span className={`${message.content.includes("You're now chatting with") ? 'font-semibold text-indigo-600' : ''}`}>
-                      {message.agentId === 'mother-agent' 
-                        ? 'Mother Agent'
-                        : agents.agents.find(a => a.id === message.agentId)?.name || message.agentId
-                      }
-                    </span>
-                    {message.responseTime && 
-                      <span className="ml-2 text-gray-400">
-                        {message.responseTime < 1000 
-                          ? `${Math.round(message.responseTime)}ms` 
-                          : `${(message.responseTime / 1000).toFixed(1)}s`}
-                      </span>
-                    }
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 max-w-[80%] shadow-sm">
-                <div className="flex space-x-2">
-                  <div className="h-2 w-2 bg-gray-400 rounded-full animate-bounce"></div>
-                  <div className="h-2 w-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                  <div className="h-2 w-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
-                </div>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-      
-      {/* Input area */}
-      <div className="bg-white border-t p-4">
-        <div className="max-w-3xl mx-auto flex">
-          <textarea
-            ref={inputRef}
-            className="flex-1 border border-gray-300 rounded-l-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none text-gray-800"
-            placeholder={`Message ${getCurrentAgentName()}...`}
-            rows={1}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isLoading}
-          />
-          <button
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-r-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={handleSendMessage}
-            disabled={!inputValue.trim() || isLoading}
+    <div className="flex flex-col h-full max-w-4xl mx-auto p-4 bg-white">
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold text-gray-800">Multi-Agent Chat</h1>
+        <div className="flex space-x-2">
+          <button 
+            onClick={downloadChatHistory}
+            className="p-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center"
+            disabled={messages.length === 0}
           >
-            Send
+            <FiDownload className="mr-1" /> Export
+          </button>
+          <button 
+            onClick={clearChat}
+            className="p-2 bg-red-600 text-white rounded hover:bg-red-700 flex items-center"
+            disabled={messages.length === 0}
+          >
+            <AiOutlineClear className="mr-1" /> Clear
           </button>
         </div>
       </div>
+      
+      {/* Agent selection */}
+      <div className="mb-4 p-3 bg-gray-50 rounded-lg shadow-sm border border-gray-200">
+        <label className="block mb-2 text-sm font-medium text-gray-700">
+          Select an agent to handle your request:
+        </label>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {agentOptions.map((agent) => (
+            <button
+              key={agent.id}
+              className={`p-2 text-sm rounded border transition-colors ${
+                selectedAgentId === agent.id
+                  ? 'bg-blue-100 border-blue-500 text-blue-700'
+                  : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100'
+              }`}
+              onClick={() => setSelectedAgentId(agent.id)}
+              title={agent.description}
+            >
+              {agent.name}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-gray-500">
+          {selectedAgentId 
+            ? `Using: ${agentOptions.find(a => a.id === selectedAgentId)?.name} - ${agentOptions.find(a => a.id === selectedAgentId)?.description}`
+            : "Using Mother Agent (default) - will delegate to specialized agents when appropriate"
+          }
+        </p>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto mb-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
+        {messages.length === 0 ? (
+          <div className="text-center text-gray-500 my-8">
+            <p className="mb-2">No messages yet. Start a conversation!</p>
+            <p className="text-sm">Try asking questions like:</p>
+            <ul className="text-sm mt-2">
+              <li>&quot;Generate a short sci-fi story about robots&quot;</li>
+              <li>&quot;Process this JSON data sample&quot;</li>
+              <li>&quot;Help me decide which programming language to learn next&quot;</li>
+              <li>&quot;Create a script to automate file backups&quot;</li>
+            </ul>
+          </div>
+        ) : (
+          messages.map((message) => (
+            <div 
+              key={message.id} 
+              className={`mb-4 p-3 rounded-lg shadow-sm ${
+                message.sender === 'user' 
+                  ? 'bg-blue-50 text-gray-800 border border-blue-100 ml-8' 
+                  : message.sender === 'mother' 
+                    ? 'bg-purple-50 text-gray-800 border border-purple-100 mr-8' 
+                    : 'bg-green-50 text-gray-800 border border-green-100 mr-8'
+              }`}
+            >
+              <div className="flex justify-between text-xs text-gray-500 mb-1">
+                <span>
+                  {message.sender === 'user' 
+                    ? 'You' 
+                    : message.sender === 'mother' 
+                      ? 'Mother Agent' 
+                      : `${message.agentName} Agent`}
+                </span>
+                <span>{message.timestamp.toLocaleTimeString()}</span>
+              </div>
+              <p className="whitespace-pre-wrap">{message.content}</p>
+              
+              {/* Display context information when available */}
+              {message.context && Object.keys(message.context).length > 0 && (
+                <div className="mt-2 text-xs bg-white p-2 rounded border border-gray-200 text-gray-800">
+                  <div className="font-semibold mb-1">Context Information:</div>
+                  <pre className="whitespace-pre-wrap overflow-x-auto">
+                    {JSON.stringify(message.context, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+        <div ref={messageEndRef} />
+      </div>
+      
+      <form onSubmit={handleSubmit} className="flex items-center">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Type your message here..."
+          className="flex-1 p-3 border border-gray-300 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-800"
+          disabled={loading}
+        />
+        <button
+          type="submit"
+          className="bg-blue-600 text-white p-3 rounded-r-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-400"
+          disabled={loading || !input.trim()}
+        >
+          {loading ? <FaSpinner className="animate-spin" /> : <IoSend />}
+        </button>
+      </form>
     </div>
   );
 } 

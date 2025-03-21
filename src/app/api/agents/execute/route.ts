@@ -3,27 +3,57 @@ import { OPENAI_API_KEY, AI_MODEL_TEMPERATURE, AI_MAX_TOKENS } from '@/utils/env
 import agents from '@/config/agents.json';
 import { addToMemory, formatConversationHistory } from '@/utils/memory';
 import { trackEvent, startTimer, endTimer } from '@/utils/analytics';
+import { detectCommand } from '@/utils/commandParser';
+import { saveFile, listFiles, readFile, deleteFile } from '@/utils/fileSystem';
 
 // OpenAI API endpoint
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
 /**
- * Executes a command using the specified agent
+ * Execute commands with the specialized agents
  */
 export async function POST(request: NextRequest) {
+  const requestStartTime = startTimer();
   try {
-    const requestStartTime = startTimer();
     const body = await request.json();
-    const { agentId, command } = body;
+    const { agentId, command, context } = body;
     
     if (!agentId || !command) {
+      trackEvent({
+        agentId: agentId || 'unknown',
+        eventType: 'error',
+        metadata: { error: 'Missing required fields' }
+      });
+      
       return NextResponse.json({ 
         error: 'Missing required fields: agentId and command are required' 
       }, { status: 400 });
     }
 
+    // Track request
+    trackEvent({
+      agentId,
+      eventType: 'request',
+      metadata: { command }
+    });
+
+    // Check if a specific parsed command was passed from the Mother Agent
+    let parsedCommand = context?.parsedCommand || null;
+    
+    // If no parsed command in context, try to detect one
+    if (!parsedCommand) {
+      parsedCommand = detectCommand(command);
+    }
+    
+    // Add the user command to this agent's memory
+    addToMemory(agentId, {
+      role: 'user',
+      content: command
+    });
+
     // Find the agent in our configuration
     const agent = agents.agents.find(a => a.id === agentId);
+    
     if (!agent) {
       trackEvent({
         agentId,
@@ -36,56 +66,379 @@ export async function POST(request: NextRequest) {
       }, { status: 404 });
     }
 
-    // Track request event
+    // Handle parsed commands with specialized behavior
+    if (parsedCommand) {
+      const commandHandlerResult = await handleSpecializedCommand(parsedCommand, agent, context);
+      if (commandHandlerResult) {
+        // Add the response to the agent's memory
+        addToMemory(agentId, {
+          role: 'agent',
+          content: commandHandlerResult
+        });
+        
+        trackEvent({
+          agentId,
+          eventType: 'response',
+          duration: endTimer(requestStartTime),
+          metadata: { 
+            command, 
+            commandType: parsedCommand.command,
+            responseLength: commandHandlerResult.length
+          }
+        });
+        
+        return NextResponse.json({
+          agentId,
+          command,
+          response: commandHandlerResult,
+          parsedCommand,
+          metrics: {
+            totalDuration: endTimer(requestStartTime)
+          }
+        });
+      }
+    }
+
+    // If no specialized handling or it didn't return a result, use the AI to generate a response
+    const aiResponse = await generateAgentResponse(agent, command, context, parsedCommand);
+    
+    // Add the AI's response to the agent's memory
+    addToMemory(agentId, {
+      role: 'agent',
+      content: aiResponse
+    });
+    
+    // Track successful response
     trackEvent({
       agentId,
-      eventType: 'request',
-      metadata: { command }
+      eventType: 'response',
+      duration: endTimer(requestStartTime),
+      metadata: { 
+        command, 
+        responseLength: aiResponse.length,
+        usedAI: true
+      }
     });
-
-    const response = await getAgentResponse(agentId, agent, command);
-    const totalDuration = endTimer(requestStartTime);
-
+    
     return NextResponse.json({
-      success: true,
       agentId,
       command,
-      response,
+      response: aiResponse,
+      parsedCommand: parsedCommand || null,
       metrics: {
-        totalDuration
+        totalDuration: endTimer(requestStartTime)
       }
-    }, { status: 200 });
+    });
     
   } catch (error: any) {
-    console.error('Error processing command with agent:', error);
-    
-    // Extract agentId from request if possible, or use 'unknown-agent' if not available
-    let agentId = 'unknown-agent';
-    try {
-      const body = await request.json();
-      agentId = body.agentId || 'unknown-agent';
-    } catch {}
+    console.error('Error executing agent command:', error);
     
     // Track error
+    let errorAgentId = 'unknown';
+    let errorCommand = '';
+    
+    try {
+      const { agentId, command } = await request.clone().json();
+      errorAgentId = agentId || 'unknown';
+      errorCommand = command || '';
+    } catch {
+      // Unable to parse request body, use defaults
+    }
+    
     trackEvent({
-      agentId,
+      agentId: errorAgentId,
       eventType: 'error',
       metadata: { 
         error: error.message || 'Unknown error',
-        stack: error.stack
+        command: errorCommand
       }
     });
     
-    return NextResponse.json({
-      error: error.message || 'Failed to process command'
+    return NextResponse.json({ 
+      error: error.message || 'An error occurred processing your request' 
     }, { status: 500 });
   }
 }
 
 /**
+ * Handle specialized command types with custom behavior
+ */
+async function handleSpecializedCommand(parsedCommand: any, agent: any, context: any): Promise<string | null> {
+  const { command, action, params } = parsedCommand;
+  
+  // Handle different command types based on the agent
+  switch (agent.id) {
+    case 'script-launcher':
+      if (command === 'create') {
+        const { type, name, content } = params;
+        
+        // Determine file extension based on type if not provided in name
+        let filename = name;
+        if (!filename.includes('.')) {
+          const extensionMap: Record<string, string> = {
+            'script': '.js',
+            'file': '.txt',
+            'document': '.md',
+            'json': '.json',
+            'html': '.html',
+            'css': '.css',
+            'python': '.py',
+            'typescript': '.ts',
+            'javascript': '.js'
+          };
+          
+          const extension = extensionMap[type.toLowerCase()] || '.txt';
+          filename = `${filename}${extension}`;
+        }
+        
+        // Actually save the file
+        const result = await saveFile(filename, content || '');
+        
+        if (result.success) {
+          const relativePath = result.path?.replace(process.cwd(), '').replace(/\\/g, '/');
+          return `${type.charAt(0).toUpperCase() + type.slice(1)} created successfully:
+- Name: ${filename}
+- Path: ${relativePath}
+- Size: ${Buffer.from(content || '').length} bytes
+
+The file has been saved to your user-files directory. You can access it at ${relativePath}.`;
+        } else {
+          return `Failed to create ${type}:
+- Name: ${filename}
+- Error: ${result.error}
+- Message: ${result.message}
+
+Please check the filename and content and try again.`;
+        }
+      } else if (command === 'list') {
+        // List files in user-files directory
+        const result = await listFiles();
+        
+        if (result.success && result.files) {
+          if (result.files.length === 0) {
+            return `No files found in the user-files directory.`;
+          }
+          
+          return `Files in your user-files directory:
+${result.files.map(file => `- ${file}`).join('\n')}
+
+Total: ${result.files.length} file(s)`;
+        } else {
+          return `Failed to list files: ${result.error}`;
+        }
+      } else if (command === 'read') {
+        // Read file command
+        const { filename } = params;
+        if (!filename) {
+          return `Please specify a filename to read.`;
+        }
+        
+        const result = await readFile(filename);
+        
+        if (result.success && result.content) {
+          const ext = filename.split('.').pop()?.toLowerCase();
+          
+          // Determine if we should show syntax highlighting (for code files)
+          const codeFileTypes = ['js', 'jsx', 'ts', 'tsx', 'html', 'css', 'py', 'rb', 'java', 'c', 'cpp', 'cs'];
+          const isCodeFile = codeFileTypes.includes(ext || '');
+          
+          return `File: ${filename}
+Path: ${result.path}
+
+${isCodeFile ? '```' + ext + '\n' : ''}${result.content}${isCodeFile ? '\n```' : ''}`;
+        } else {
+          return `Failed to read file "${filename}": ${result.error || result.message}`;
+        }
+      } else if (command === 'delete') {
+        // Delete file command
+        const { filename } = params;
+        if (!filename) {
+          return `Please specify a filename to delete.`;
+        }
+        
+        const result = await deleteFile(filename);
+        
+        if (result.success) {
+          return `File "${filename}" has been successfully deleted.`;
+        } else {
+          return `Failed to delete file "${filename}": ${result.error || result.message}`;
+        }
+      }
+      break;
+      
+    case 'data-processor':
+      if (command === 'analyze') {
+        const { type, content, file } = params;
+        
+        // If a file name is provided, read its content instead
+        if (file && !content) {
+          const fileResult = await readFile(file);
+          
+          if (fileResult.success && fileResult.content) {
+            // Update the content param with the file content
+            params.content = fileResult.content;
+            
+            // If type is not specified, try to determine from file extension
+            if (!type) {
+              const ext = file.split('.').pop()?.toLowerCase();
+              if (ext === 'json') params.type = 'json';
+              else if (['txt', 'md'].includes(ext || '')) params.type = 'text';
+              else params.type = ext || 'unknown';
+            }
+          } else {
+            return `Failed to read file "${file}": ${fileResult.error || fileResult.message}`;
+          }
+        }
+        
+        // Continue with standard analysis based on type
+        if (params.type === 'json' && params.content) {
+          try {
+            // Try to parse the JSON and provide information about it
+            const parsedJson = JSON.parse(params.content);
+            const keys = Object.keys(parsedJson);
+            
+            return `JSON Analysis Results:
+- Valid JSON structure: Yes
+- Number of top-level keys: ${keys.length}
+- Keys: ${keys.join(', ')}
+- Data types: ${keys.map(k => `${k}: ${typeof parsedJson[k]}`).join(', ')}
+
+This represents a basic analysis of the JSON structure${file ? ` in file "${file}"` : ''}.`;
+          } catch (error) {
+            return `Invalid JSON provided${file ? ` in file "${file}"` : ''}. Please check the formatting and try again. Error: ${error instanceof Error ? error.message : 'Unknown parsing error'}`;
+          }
+        }
+        
+        return `Analysis of ${params.type || 'content'} initiated${file ? ` for file "${file}"` : ''}. In a real implementation, I would process the content and provide detailed analysis.`;
+      } else if (command === 'read') {
+        // Data processors can also read files
+        const { filename } = params;
+        if (!filename) {
+          return `Please specify a filename to read.`;
+        }
+        
+        const result = await readFile(filename);
+        
+        if (result.success && result.content) {
+          const ext = filename.split('.').pop()?.toLowerCase();
+          
+          // For data processor, provide additional stats about the file
+          const lines = result.content.split('\n').length;
+          const chars = result.content.length;
+          const words = result.content.split(/\s+/).filter(Boolean).length;
+          
+          return `File Analysis: ${filename}
+Path: ${result.path}
+
+Stats:
+- Lines: ${lines}
+- Words: ${words}
+- Characters: ${chars}
+- File type: ${ext || 'unknown'}
+
+Preview:
+${result.content.length > 500 ? result.content.substring(0, 500) + '...' : result.content}`;
+        } else {
+          return `Failed to read file "${filename}": ${result.error || result.message}`;
+        }
+      }
+      break;
+      
+    case 'decision-maker':
+      if (command === 'schedule') {
+        const { type, description, time } = params;
+        return `${type.charAt(0).toUpperCase() + type.slice(1)} scheduled:
+- Description: ${description}
+- Time: ${time || 'Not specified'}
+
+I've logged this ${type} for you. In a real implementation, this would be added to your calendar or task list.`;
+      }
+      break;
+      
+    case 'text-generator':
+      if (command === 'search') {
+        const { query, source } = params;
+        return `Search results for "${query}"${source ? ` in ${source}` : ''}:
+
+In a real implementation, I would connect to a search API or database to find relevant information about "${query}". For now, this is a simulated response indicating that the search command was properly parsed and recognized.`;
+      }
+      break;
+  }
+  
+  // Return null if no specialized handling was found or applicable
+  return null;
+}
+
+/**
+ * Generates a response using the AI model based on the agent's configuration
+ */
+async function generateAgentResponse(agent: any, command: string, context: any, parsedCommand: any): Promise<string> {
+  if (!OPENAI_API_KEY) {
+    console.warn('OpenAI API key not configured, using simulated response');
+    return `[Agent: ${agent.name}] This is a simulated response. Please configure the OpenAI API key for real AI responses.`;
+  }
+  
+  const model = agent.config?.model || 'gpt-3.5-turbo';
+  const temperature = agent.config?.temperature || AI_MODEL_TEMPERATURE;
+  const maxTokens = agent.config?.maxTokens || AI_MAX_TOKENS;
+  
+  // Build a prompt that includes agent-specific information and any context
+  let contextInfo = '';
+  if (context && Object.keys(context).length > 0) {
+    contextInfo = `\nAdditional context: ${JSON.stringify(context, null, 2)}`;
+  }
+  
+  let commandInfo = `User command: ${command}`;
+  if (parsedCommand) {
+    commandInfo += `\nParsed command: ${JSON.stringify(parsedCommand, null, 2)}`;
+  }
+  
+  const prompt = `
+You are ${agent.name}, a specialized AI agent with the following capabilities:
+${agent.capabilities.map((cap: string) => `- ${cap}`).join('\n')}
+
+${commandInfo}${contextInfo}
+
+Respond as ${agent.name}, focusing on your specific expertise. Provide a helpful, informative response to the user's command.
+`;
+  
+  const response = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: `You are ${agent.name}, a specialized AI agent focused on ${agent.description}.`
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature,
+      max_tokens: maxTokens
+    })
+  });
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    console.error('OpenAI API error:', data);
+    throw new Error(data.error?.message || 'Failed to generate response from OpenAI');
+  }
+  
+  return data.choices[0].message.content.trim();
+}
+
+/**
  * Gets a response from an agent using OpenAI or falls back to simulated response
  */
-async function getAgentResponse(agentId: string, agent: any, command: string): Promise<string> {
+async function getAgentResponse(agentId: string, agent: any, command: string, context?: any): Promise<string> {
   try {
     const startTime = startTimer();
     
@@ -99,7 +452,7 @@ async function getAgentResponse(agentId: string, agent: any, command: string): P
     if (!OPENAI_API_KEY) {
       console.warn('No OpenAI API key found, returning simulated response');
       const simulationStartTime = startTimer();
-      const simulatedResponse = simulateAgentResponse(agent, command);
+      const simulatedResponse = simulateAgentResponse(agent, command, context);
       const simulationDuration = endTimer(simulationStartTime);
       
       // Add the simulated response to memory
@@ -116,7 +469,8 @@ async function getAgentResponse(agentId: string, agent: any, command: string): P
         metadata: { 
           simulated: true,
           responseLength: simulatedResponse.length,
-          command
+          command,
+          contextUsed: !!context
         }
       });
       
@@ -126,17 +480,23 @@ async function getAgentResponse(agentId: string, agent: any, command: string): P
     // Get recent conversation history for context
     const conversationHistory = formatConversationHistory(agentId, 5);
 
+    // Format context information if provided
+    let contextInfo = '';
+    if (context && Object.keys(context).length > 0) {
+      contextInfo = `\nAdditional context from Mother Agent: ${JSON.stringify(context, null, 2)}`;
+    }
+
     // Prepare the prompt for the specialized agent
     const prompt = `
 You are the ${agent.name} agent. You are specialized in: ${agent.capabilities.join(', ')}.
 ${agent.description}
 
 Recent conversation history:
-${conversationHistory}
+${conversationHistory}${contextInfo}
 
 Current user command: "${command}"
 
-Please respond to this request based on your specialization. Keep your response relevant to your specific capabilities, and provide a helpful and informative answer.`;
+Please respond to this request based on your specialization. Keep your response relevant to your specific capabilities, and provide a helpful and informative answer. If context information was provided by the Mother Agent, use it to enhance your response.`;
 
     const apiStartTime = startTimer();
     const response = await fetch(OPENAI_API_URL, {
@@ -199,7 +559,8 @@ Please respond to this request based on your specialization. Keep your response 
       metadata: { 
         apiDuration,
         responseLength: aiResponse.length,
-        command
+        command,
+        contextUsed: !!context
       }
     });
     
@@ -221,7 +582,7 @@ Please respond to this request based on your specialization. Keep your response 
     
     // Fall back to a simulated response if the API call fails
     const simulationStartTime = startTimer();
-    const simulatedResponse = simulateAgentResponse(agent, command);
+    const simulatedResponse = simulateAgentResponse(agent, command, context);
     const simulationDuration = endTimer(simulationStartTime);
     
     // Add the fallback response to memory
@@ -239,7 +600,8 @@ Please respond to this request based on your specialization. Keep your response 
         simulated: true,
         fallback: true,
         responseLength: simulatedResponse.length,
-        command
+        command,
+        contextUsed: !!context
       }
     });
     
@@ -248,50 +610,30 @@ Please respond to this request based on your specialization. Keep your response 
 }
 
 /**
- * Simulates a response from an agent when the API is not available
+ * Simulates a response from an agent when OpenAI API is not available
  */
-function simulateAgentResponse(agent: any, command: string): string {
-  const lowercaseCommand = command.toLowerCase();
-  
-  // Different responses based on agent type
-  switch(agent.id) {
+function simulateAgentResponse(agent: any, command: string, context?: any): string {
+  // Generate a contextual prefix if context is provided
+  let contextPrefix = '';
+  if (context && Object.keys(context).length > 0) {
+    contextPrefix = `Using the context information you provided, `;
+  }
+
+  // Simulate different responses based on agent type
+  switch (agent.id) {
     case 'text-generator':
-      if (lowercaseCommand.includes('summary') || lowercaseCommand.includes('summarize')) {
-        return `Here's a concise summary as requested: [Simulated summary content based on your request]`;
-      } else if (lowercaseCommand.includes('blog') || lowercaseCommand.includes('article')) {
-        return `I've drafted a blog post on the topic you requested. This is a simulated response since the OpenAI API is not configured.`;
-      } else {
-        return `I've generated the text you requested. Note that this is a simulated response since the OpenAI API is not configured.`;
-      }
-      
+      return `${contextPrefix}As the Text Generator agent, I've analyzed your request: "${command}". Here's a creative response based on your input. [Simulated Response - OpenAI API not available]`;
+    
     case 'data-processor':
-      if (lowercaseCommand.includes('convert') || lowercaseCommand.includes('transformation')) {
-        return `I've processed the data format conversion you requested. This is a simulated response.`;
-      } else if (lowercaseCommand.includes('validate')) {
-        return `I've validated the data structure as requested. This is a simulated response without actual validation.`;
-      } else {
-        return `I've processed the data according to your specifications. This is a simulated response since the OpenAI API is not configured.`;
-      }
-      
+      return `${contextPrefix}I've processed the data in your request: "${command}". Here's my structured analysis. [Simulated Response - OpenAI API not available]`;
+    
     case 'decision-maker':
-      if (lowercaseCommand.includes('options') || lowercaseCommand.includes('decide') || lowercaseCommand.includes('choice')) {
-        return `After analyzing the options, I recommend proceeding with Option A because it offers the best balance of risk and reward. Note that this is a simulated response.`;
-      } else if (lowercaseCommand.includes('risk')) {
-        return `I've assessed the risks involved and identified three key factors to consider: [simulated risk factors]. This is a simulated response.`;
-      } else {
-        return `Based on your criteria, I've made a recommendation for your decision. This is a simulated response since the OpenAI API is not configured.`;
-      }
-      
+      return `${contextPrefix}Based on your request: "${command}", I've evaluated the options and here's my recommendation. [Simulated Response - OpenAI API not available]`;
+    
     case 'script-launcher':
-      if (lowercaseCommand.includes('run') || lowercaseCommand.includes('execute') || lowercaseCommand.includes('launch')) {
-        return `I've prepared the script for execution. This is a simulated response without actual script execution.`;
-      } else if (lowercaseCommand.includes('schedule')) {
-        return `I've scheduled the task to run at the specified time. This is a simulated response without actual scheduling.`;
-      } else {
-        return `I've set up the automation task as requested. This is a simulated response since the OpenAI API is not configured.`;
-      }
-      
+      return `${contextPrefix}I've processed your script request: "${command}". Here's how the execution would proceed. [Simulated Response - OpenAI API not available]`;
+    
     default:
-      return `I've processed your request as the ${agent.name} agent. This is a simulated response since the OpenAI API is not configured.`;
+      return `${contextPrefix}I'm a simulated agent response for: "${command}". In a live environment with an API key, I would provide a more detailed and accurate response. [Simulated Response - OpenAI API not available]`;
   }
 } 

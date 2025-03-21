@@ -1,6 +1,6 @@
 ---
 description: Apply these rules when making changes to the project
-globs:
+globs: 
 alwaysApply: true
 ---
 
@@ -98,3 +98,5 @@ Update this rule if user requested changes to the project requirement, etc.
 *   If opting for the Pages Router: Use the `pages/*.tsx` flat structure exclusively.
 *   Mirror the routing logic for alternative frameworks (e.g., React Router, SvelteKit, etc.), ensuring consistency.
 *   Never mix version-specific patterns (e.g., do not combine `pages/` structure with App Router projects).
+
+* dont change UI if you are not asked too.
