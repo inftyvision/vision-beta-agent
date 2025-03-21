@@ -1,0 +1,100 @@
+---
+description: Apply these rules when making changes to the project
+globs:
+alwaysApply: true
+---
+
+Update this rule if user requested changes to the project requirement, etc.
+## Project Overview
+
+*   **Type:** cursor_project_rules
+*   **Description:** I want to build a scalable modular multi agent I could use as an architecture base to use with different agent and applications I would build separately.
+*   **Primary Goal:** Build a modular, plug-and-play multi-agent architecture that supports AI-driven decision making, prompt engineering, and the integration of independent sub-agents while maintaining scalability and ease of configuration.
+
+## Project Structure
+
+### Framework-Specific Routing
+
+*   **Directory Rules:**
+
+    *   **Next.js 14:** Use the `app/[route]/page.tsx` conventions to enforce nested routing for modular agent pages.
+    *   **Example 1:** "Next.js 14 (App Router)" → `app/[route]/page.tsx` conventions
+    *   **Example 2:** "Next.js (Pages Router)" → `pages/[route].tsx` pattern
+    *   **Example 3:** "React Router 6" → `src/routes/` with `createBrowserRouter`
+
+### Core Directories
+
+*   **Versioned Structure:**
+
+    *   **app/api:** Next.js 14 API routes using Route Handlers for backend interactions.
+    *   **src/views:** React component library for displaying modular agent interfaces and dashboard views.
+
+### Key Files
+
+*   **Stack-Versioned Patterns:**
+
+    *   **app/dashboard/layout.tsx:** Next.js 14 root layout for creating a modular dashboard structure.
+    *   **pages/_app.js:** Customization for Next.js Pages Router if chosen, managing global providers and styling.
+
+## Tech Stack Rules
+
+*   **Version Enforcement:**
+
+    *   **next@14:** Enforce the App Router paradigm with nested `app/` directories; avoid legacy patterns like `getInitialProps`.
+    *   **node@latest:** Utilize modern asynchronous patterns, ensuring scalable backend processes.
+    *   **react@latest:** Build components with hooks and context for efficient state management.
+    *   **tailwindcss@latest:** Adopt a utility-first approach for rapid, consistent UI styling.
+    *   **firebase@latest (Optional):** Use for backend services such as authentication and real-time data management with secure API practices.
+
+## PRD Compliance
+
+*   **Non-Negotiable:**
+
+    *   "modular plug-and-play system where each agent follows standardized configuration formats (JSON/MDX) and supports both synchronous and asynchronous processes": Must be strictly followed to ensure that agents can be independently developed and integrated without breaking system integrity.
+
+## App Flow Integration
+
+*   **Stack-Aligned Flow:**
+
+    *   Example: "Next.js 14 Auth Flow → `app/auth/login/page.tsx` uses server actions to handle secure sign-ins and agent initialization."
+    *   The dashboard navigation and agent selection routes are designed to mirror the modular plug-and-play architecture, ensuring a seamless interaction from home screen to sub-agent execution.
+
+## Best Practices
+
+*   **Next.js**
+
+    *   Use file-based routing with nested folders for clear separation of agent routes.
+    *   Implement server actions and API route handlers for robust, asynchronous processing.
+    *   Keep pages lean, delegating heavy logic to server-side functions.
+
+*   **Node.js**
+
+    *   Leverage asynchronous coding patterns, especially using async/await for scalability.
+    *   Develop a modular configuration system to allow plug-and-play integration of agents.
+    *   Employ clustering or worker threads when necessary for handling multiple concurrent processes.
+
+*   **React**
+
+    *   Utilize hooks and the Context API for global state management across agents.
+    *   Build components with reusability and testability in mind.
+    *   Optimize rendering with memoization techniques to maintain performance in a dynamic UI.
+
+*   **Tailwind CSS**
+
+    *   Adopt utility-first classes to ensure rapid and consistent styling.
+    *   Maintain a centralized design system to support scalability of UI components.
+    *   Avoid inline styles to leverage the full advantages of Tailwind’s configuration and theming.
+
+*   **Firebase (Optional)**
+
+    *   Secure API keys and configure robust authentication protocols.
+    *   Use real-time database features carefully to support scalable data interactions.
+    *   Follow best practices in data modeling and indexing to optimize performance.
+
+## Rules
+
+*   Derive folder/file patterns **directly** from the techStackDoc versions and guidelines.
+*   If using Next.js 14 App Router: Enforce the `app/` directory pattern with nested route folders.
+*   If opting for the Pages Router: Use the `pages/*.tsx` flat structure exclusively.
+*   Mirror the routing logic for alternative frameworks (e.g., React Router, SvelteKit, etc.), ensuring consistency.
+*   Never mix version-specific patterns (e.g., do not combine `pages/` structure with App Router projects).

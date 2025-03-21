@@ -1,0 +1,77 @@
+{
+  "agents": [
+    {
+      "id": "text-generator",
+      "name": "Text Generator",
+      "description": "Generate creative text based on prompts",
+      "category": "content",
+      "version": "1.0.0",
+      "config": {
+        "model": "gpt-3.5-turbo",
+        "maxTokens": 1024,
+        "temperature": 0.7
+      },
+      "capabilities": [
+        "Creative writing",
+        "Storytelling",
+        "Content generation",
+        "Copywriting",
+        "Blog post creation"
+      ]
+    },
+    {
+      "id": "data-processor",
+      "name": "Data Processor",
+      "description": "Process and transform JSON and MDX data",
+      "category": "data",
+      "version": "1.0.0",
+      "config": {
+        "supportedFormats": ["json", "mdx", "yaml"],
+        "maxFileSize": "10MB"
+      },
+      "capabilities": [
+        "JSON transformation",
+        "Data formatting",
+        "MDX processing",
+        "Data validation",
+        "Schema conversion"
+      ]
+    },
+    {
+      "id": "decision-maker",
+      "name": "Decision Maker",
+      "description": "AI-driven decision making based on inputs",
+      "category": "ai",
+      "version": "1.0.0",
+      "config": {
+        "model": "advanced-reasoning",
+        "confidenceThreshold": 0.75
+      },
+      "capabilities": [
+        "Option analysis",
+        "Pros and cons evaluation",
+        "Risk assessment",
+        "Priority setting",
+        "Decision frameworks"
+      ]
+    },
+    {
+      "id": "script-launcher",
+      "name": "Script Launcher",
+      "description": "Launch scripts and automate tasks",
+      "category": "automation",
+      "version": "1.0.0",
+      "config": {
+        "supportedLanguages": ["bash", "python", "node"],
+        "securityLevel": "sandbox"
+      },
+      "capabilities": [
+        "Task automation",
+        "Script scheduling",
+        "Process monitoring",
+        "Workflow management",
+        "Error recovery"
+      ]
+    }
+  ]
+} 
